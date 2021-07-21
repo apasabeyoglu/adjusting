@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/csv"
 	"fmt"
-	"log"
 	"os"
 	"sort"
 )
@@ -11,8 +10,8 @@ import (
 type Events struct {
 	id        string
 	eventType string
-	actorID   string
-	repoID    string
+	actorName string
+	repoName  string
 }
 
 type EventFrequency struct {
@@ -29,8 +28,9 @@ func main() {
 
 	actorMap := rawDataParser(actorsRaw)
 	repoMap := rawDataParser(reposRaw)
-	watchEventsSorted, pushEventsSorted, userPushEventsSorted, commitsSorted := readRawEvents(eventsRaw, commitsRaw, actorMap, repoMap)
+	watchEventsSorted, pushEventsSorted, userPullRequestsSorted, commitsSorted := readRawEvents(eventsRaw, commitsRaw, actorMap, repoMap)
 
+	// I know this is looking kinda ugly, but I wanted to keep it simple
 	fmt.Println("Watch Events By Repositories: ")
 	fmt.Println(watchEventsSorted)
 	fmt.Println("------------------------------")
@@ -38,7 +38,7 @@ func main() {
 	fmt.Println(pushEventsSorted)
 	fmt.Println("------------------------------")
 	fmt.Println("Push Events By Users: ")
-	fmt.Println(userPushEventsSorted)
+	fmt.Println(userPullRequestsSorted)
 	fmt.Println("------------------------------")
 	fmt.Println("Commits By Users: ")
 	fmt.Println(commitsSorted)
@@ -48,35 +48,25 @@ func main() {
 func readCsvFile(filePath string) [][]string {
 	f, err := os.Open(filePath)
 	if err != nil {
-		log.Fatal("Unable to read file "+filePath, err)
+		panic("Unable to read file " + filePath + " " + err.Error())
 	}
 	defer f.Close()
 
 	csvReader := csv.NewReader(f)
 	result, err := csvReader.ReadAll()
 	if err != nil {
-		log.Fatal("Unable to parse CSV file : "+filePath, err)
+		panic("Unable to parse CSV file : " + filePath + " " + err.Error())
 	}
 
 	return result
 }
 
-func checkEventFrequencyByRepoID(event Events, events map[string]int) map[string]int {
-	_, ok := events[event.repoID]
+func checkEventFrequency(controllerValue string, events map[string]int) map[string]int {
+	_, ok := events[controllerValue]
 	if !ok {
-		events[event.repoID] = 1
+		events[controllerValue] = 1
 	} else {
-		events[event.repoID]++
-	}
-	return events
-}
-
-func checkEventFrequencyByActorID(event Events, events map[string]int) map[string]int {
-	_, ok := events[event.actorID]
-	if !ok {
-		events[event.actorID] = 1
-	} else {
-		events[event.actorID]++
+		events[controllerValue]++
 	}
 	return events
 }
@@ -96,15 +86,34 @@ func mapSorter(events map[string]int) []EventFrequency {
 		return result[i].eventFrequency > result[j].eventFrequency
 	})
 
+	if len(result) < 10 {
+		return result
+	}
+
 	return result[0:10]
 }
 
+// This function should only be used with 2 column CSV files
 func rawDataParser(rawData [][]string) map[string]string {
 	result := make(map[string]string)
 	for _, data := range rawData {
 		result[data[0]] = data[1]
 	}
 	return result
+}
+
+func getCommitsByUser(rawCommitData [][]string, eventsWithUserID map[string]string) map[string]int {
+	userCommits := make(map[string]int)
+	for _, commit := range rawCommitData {
+		eventID := commit[2]
+		_, ok := userCommits[eventsWithUserID[eventID]]
+		if !ok {
+			userCommits[eventsWithUserID[eventID]] = 1
+		} else {
+			userCommits[eventsWithUserID[eventID]]++
+		}
+	}
+	return userCommits
 }
 
 func readRawEvents(rawData, rawCommitData [][]string, actorMap, repoMap map[string]string) ([]EventFrequency, []EventFrequency, []EventFrequency, []EventFrequency) {
@@ -116,33 +125,24 @@ func readRawEvents(rawData, rawCommitData [][]string, actorMap, repoMap map[stri
 	for _, data := range rawData {
 		event.id = data[0]
 		event.eventType = data[1]
-		event.actorID = actorMap[data[2]]
-		event.repoID = repoMap[data[3]]
+		event.actorName = actorMap[data[2]]
+		event.repoName = repoMap[data[3]]
 		if event.eventType == "WatchEvent" {
-			watchEvents = checkEventFrequencyByRepoID(event, watchEvents)
+			watchEvents = checkEventFrequency(event.repoName, watchEvents)
 		} else if event.eventType == "PushEvent" {
-			pushEvents = checkEventFrequencyByRepoID(event, pushEvents)
+			pushEvents = checkEventFrequency(event.repoName, pushEvents)
 		} else if event.eventType == "PullRequestEvent" {
-			userPREvents = checkEventFrequencyByActorID(event, userPREvents)
+			userPREvents = checkEventFrequency(event.actorName, userPREvents)
 		}
-		eventsWithUserID[event.id] = event.actorID
+		eventsWithUserID[event.id] = event.actorName
 	}
 
-	userCommits := make(map[string]int)
-	for _, commit := range rawCommitData {
-		eventID := commit[2]
-		_, ok := userCommits[eventsWithUserID[eventID]]
-		if !ok {
-			userCommits[eventsWithUserID[eventID]] = 1
-		} else {
-			userCommits[eventsWithUserID[eventID]]++
-		}
-	}
+	userCommits := getCommitsByUser(rawCommitData, eventsWithUserID)
 
 	watchEventsSorted := mapSorter(watchEvents)
 	pushEventsSorted := mapSorter(pushEvents)
-	userPushEventsSorted := mapSorter(userPREvents)
+	userPullRequestsSorted := mapSorter(userPREvents)
 	commitsSorted := mapSorter(userCommits)
 
-	return watchEventsSorted, pushEventsSorted, userPushEventsSorted, commitsSorted
+	return watchEventsSorted, pushEventsSorted, userPullRequestsSorted, commitsSorted
 }
